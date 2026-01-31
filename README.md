@@ -28,6 +28,8 @@ py -m src.render_report --clusters-csv $clusters.FullName --out-dir assets
 
 ![Coordination cluster sizes](assets/coord_cluster_sizes.png)
 
+This histogram shows how many accounts appear in each coordination cluster. The quickstart sample is small, so most bins may be sparse or empty. A longer live capture typically shifts mass toward larger clusters and fills more bins. In assets/top_clusters.md, a high top_target_share means a cluster concentrates on a single reply target within the time windows, which can signal synchronized attention. Treat it as a triage signal rather than proof of coordination.
+
 Top clusters table: assets/top_clusters.md
 
 Data and privacy
