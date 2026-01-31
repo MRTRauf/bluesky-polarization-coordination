@@ -1,0 +1,8 @@
+websockets
+pandas
+pyarrow
+orjson
+python-dateutil
+networkx
+python-louvain
+scikit-learn
