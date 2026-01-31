@@ -1,11 +1,11 @@
-.venv/
+﻿.venv/
 __pycache__/
 *.pyc
-*.parquet
 *.jsonl
+
 data/raw/
 data/processed/
-artifacts/*
-!artifacts/
-!artifacts/*.json
-!artifacts/*_summary.json
+artifacts/
+
+*.parquet
+!data/sample/posts_sample.parquet
