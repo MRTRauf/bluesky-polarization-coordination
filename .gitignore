@@ -6,6 +6,7 @@ __pycache__/
 data/raw/
 data/processed/
 artifacts/
+!assets/
 
 *.parquet
 !data/sample/posts_sample.parquet
