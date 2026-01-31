@@ -4,11 +4,11 @@ Bluesky Jetstream ingest -> reply network -> polarization metrics -> coordinatio
 Privacy: author DIDs and reply targets are hashed (sha256 hex) before storage.
 
 What this repo demonstrates
-- Jetstream ingestion to structured Parquet for network analysis
-- Reply network construction with weighted edges
-- Louvain community detection and polarization metrics
-- Coordination detection via co-reply targets in time windows
-- Lightweight artifacts for reproducible inspection
+- Bluesky Jetstream ingestion
+- Reply network construction
+- Polarization metrics (modularity, cross-community ratio)
+- Coordination detection via shared reply targets
+- Privacy-preserving hashing
 
 Setup (Windows PowerShell)
 
@@ -21,19 +21,23 @@ py -m pip install -r requirements.txt
 Quickstart (no live capture)
 
 ```powershell
-py -m src.make_sample --in-parquet data\processed\posts_YYYYMMDDTHHMMSSZ.parquet --out-parquet data\sample\posts_sample.parquet --n 2000
 py -m src.build_reply_network --in-parquet data\sample\posts_sample.parquet
-py -m src.polarization_reply --edges-parquet artifacts\replynet_YYYYMMDDTHHMMSSZ_edges.parquet --posts-parquet data\sample\posts_sample.parquet
+$replynet = Get-ChildItem artifacts\replynet_*_summary.json | Sort-Object LastWriteTime | Select-Object -Last 1
+$edges = $replynet.FullName -replace "_summary.json","_edges.parquet"
+py -m src.polarization_reply --edges-parquet $edges --posts-parquet data\sample\posts_sample.parquet
 py -m src.coordination_targets --in-parquet data\sample\posts_sample.parquet --window-minutes 10 --min-target-posts 2 --max-bucket-accounts 30
 ```
 
 Live capture
 
 ```powershell
-py -m src.ingest_jetstream --minutes 5
-py -m src.build_reply_network --in-parquet data\processed\posts_YYYYMMDDTHHMMSSZ.parquet
-py -m src.polarization_reply --edges-parquet artifacts\replynet_YYYYMMDDTHHMMSSZ_edges.parquet --posts-parquet data\processed\posts_YYYYMMDDTHHMMSSZ.parquet
-py -m src.coordination_targets --in-parquet data\processed\posts_YYYYMMDDTHHMMSSZ.parquet --window-minutes 10 --min-target-posts 2 --max-bucket-accounts 30
+py -m src.ingest_jetstream --minutes 20
+$latest_parq = Get-ChildItem data\processed\posts_*.parquet | Sort-Object LastWriteTime | Select-Object -Last 1
+py -m src.build_reply_network --in-parquet $latest_parq.FullName
+$replynet = Get-ChildItem artifacts\replynet_*_summary.json | Sort-Object LastWriteTime | Select-Object -Last 1
+$edges = $replynet.FullName -replace "_summary.json","_edges.parquet"
+py -m src.polarization_reply --edges-parquet $edges --posts-parquet $latest_parq.FullName
+py -m src.coordination_targets --in-parquet $latest_parq.FullName --window-minutes 10 --min-target-posts 2 --max-bucket-accounts 30
 ```
 
 Artifacts
@@ -55,28 +59,12 @@ Artifacts
 | artifacts/coordtargets_<UTC>_accounts.csv | Account cluster membership and coord_score |
 | artifacts/coordtargets_<UTC>_summary.json | Coordination summary stats |
 
+Troubleshooting
+- Git safe.directory: `git config --global --add safe.directory D:\!Project\bluesky-polarization-coordination`
+- If a coordination cluster is too large, lower `--max-bucket-accounts` to suppress broad buckets
+
 Results (example run, 2026-01-31)
 - posts=49333 replies=20843 from data/processed/posts_20260131T123349Z.parquet
 - polarization modularity=0.9857 cross_ratio=0.0088 from artifacts/polarization_20260131T125509Z_metrics.json
 - coordination clusters=303 edges=5077 from artifacts/coordtargets_20260131T130156Z_summary.json
 - If your artifacts differ, copy metrics from the matching *_summary.json or *_metrics.json files.
-
-Project structure
-
-```
-bluesky-polarization-coordination/
-  artifacts/
-  data/
-    raw/
-    processed/
-    sample/
-  src/
-    build_reply_network.py
-    coordination_links.py
-    coordination_targets.py
-    ingest_jetstream.py
-    inspect_raw_jsonl.py
-    make_sample.py
-    polarization_reply.py
-    paths.py
-```
