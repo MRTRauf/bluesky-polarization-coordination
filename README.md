@@ -19,6 +19,17 @@ flowchart TD
   E --> F[clusters/accounts]
 ```
 
+Visual summary
+
+```powershell
+$clusters = Get-ChildItem artifacts\coordtargets_*_clusters.csv | Sort-Object LastWriteTime | Select-Object -Last 1
+py -m src.render_report --clusters-csv $clusters.FullName --out-dir assets
+```
+
+![Coordination cluster sizes](assets/coord_cluster_sizes.png)
+
+Top clusters table: assets/top_clusters.md
+
 Data and privacy
 - Raw Jetstream events are not committed
 - Stored identifiers are hashes of DIDs and reply targets

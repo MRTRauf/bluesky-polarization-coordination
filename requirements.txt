@@ -6,3 +6,4 @@ python-dateutil
 networkx
 python-louvain
 scikit-learn
+matplotlib
