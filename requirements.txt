@@ -7,3 +7,7 @@ networkx
 python-louvain
 scikit-learn
 matplotlib
+bertopic
+sentence-transformers
+umap-learn
+hdbscan

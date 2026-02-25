@@ -74,6 +74,22 @@ Outputs (Artifacts)
 | coordtargets_*_accounts.csv | Account cluster membership and coord_score |
 | coordtargets_*_summary.json | Coordination summary stats |
 
+Topic modeling
+Run BERTopic on cleaned posts to summarize themes beyond TF-IDF keywords.
+
+```powershell
+py -m src.topic_modeling --posts-parquet data\processed\posts_20260131T123349Z.parquet --sample-n 20000 --min-topic-size 50 --min-df 5 --max-df 0.6 --ngram-range 1,2
+```
+
+Generated artifacts:
+- artifacts/topicmodel_<UTC>_topics.csv with topic_id, topic_size, top_words, representative_posts
+- artifacts/topicmodel_<UTC>_doc_topics.parquet with did_hash, created_at, topic_id, topic_prob
+- artifacts/topicmodel_<UTC>_topic_summary.json with n_posts_used, n_topics, runtime_seconds, example_top_words, model_params
+
+Example console snippet:
+- topic=12 size=438 words=trump administration, executive order, white house
+- examples=trump signs new order ... | briefing from white house ... | administration policy update ...
+
 Results snapshot
 Sample run (sample parquet) is a smoke test and will vary by sample selection.
 Full run example is captured in REPORT.md and does not auto-update.
