@@ -10,7 +10,8 @@ import networkx as nx
 import orjson
 import pandas as pd
 from community import community_louvain
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
+import re
 
 from .paths import ARTIFACTS_DIR, ensure_dirs
 
@@ -20,10 +21,61 @@ def utc_stamp() -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Compute polarization metrics from reply network.")
-    parser.add_argument("--edges-parquet", required=True, help="Input reply edges parquet.")
-    parser.add_argument("--posts-parquet", required=True, help="Input posts parquet.")
-    parser.add_argument("--out-prefix", default=None, help="Output prefix for artifacts.")
+    parser = argparse.ArgumentParser(
+        description="Compute polarization metrics and community keywords from reply network."
+    )
+
+    # Required inputs
+    parser.add_argument(
+        "--edges-parquet",
+        required=True,
+        help="Input reply edges parquet."
+    )
+    parser.add_argument(
+        "--posts-parquet",
+        required=True,
+        help="Input posts parquet."
+    )
+
+    # Output control
+    parser.add_argument(
+        "--out-prefix",
+        default=None,
+        help="Output prefix for artifacts (default: artifacts/polarization_<UTCSTAMP>)."
+    )
+
+    # Keyword extraction controls
+    parser.add_argument(
+        "--topk-terms",
+        type=int,
+        default=25,
+        help="Number of top TF-IDF terms per community (default: 25)."
+    )
+    parser.add_argument(
+        "--max-posts-per-community",
+        type=int,
+        default=2000,
+        help="Maximum number of posts per community used for TF-IDF (default: 2000)."
+    )
+    parser.add_argument(
+        "--min-community-posts",
+        type=int,
+        default=50,
+        help="Minimum number of posts required for a community to be included in TF-IDF (default: 50)."
+    )
+    parser.add_argument(
+        "--min-df",
+        type=int,
+        default=2,
+        help="Minimum document frequency across community-docs (default: 2)."
+    )
+    parser.add_argument(
+        "--max-df",
+        type=float,
+        default=0.7,
+        help="Maximum document frequency ratio across community-docs (default: 0.7)."
+    )
+
     return parser.parse_args()
 
 
@@ -39,44 +91,126 @@ def build_undirected_graph(edges: pd.DataFrame) -> nx.Graph:
             graph.add_edge(src, dst, weight=weight)
     return graph
 
+URL_RE = re.compile(r"https?://\S+|www\.\S+")
+MENTION_RE = re.compile(r"@\w+")
+HANDLE_RE = re.compile(r"\b(bsky\.app|youtu\.be|youtube|t\.co)\b", re.IGNORECASE)
+WS_RE = re.compile(r"\s+")
+
+# Stopwords tambahan (ringan) untuk membuat keywords lebih "tematik"
+GERMAN_STOP = {
+    "und","oder","aber","dass","das","die","der","den","dem","ein","eine","einen","einem","einer",
+    "ist","sind","war","waren","zu","zum","zur","im","in","am","an","auf","mit","von","für","nicht",
+    "ich","du","er","sie","es","wir","ihr","mein","dein","sein","ihr","euch","uns"
+}
+INDO_STOP = {
+    "dan","atau","tapi","yang","ini","itu","di","ke","dari","untuk","pada","dengan","tidak","iya",
+    "saya","aku","kamu","dia","mereka","kami","kita","anda","nya","lah","pun","jadi","karena"
+}
+
+NOISE_TOKENS = {
+    "https","http","www","com","org","net","jpg","png","gif","amp","rt",
+    "reply","repost","like","follow"
+}
+
+def make_stopwords() -> set[str]:
+    # gabungkan stopwords English + German + Indonesian + noise token
+    return set(ENGLISH_STOP_WORDS) | GERMAN_STOP | INDO_STOP | NOISE_TOKENS
+
+def clean_text(s: str) -> str:
+    s = s or ""
+    s = s.lower()
+    s = URL_RE.sub(" ", s)
+    s = MENTION_RE.sub(" ", s)
+    s = HANDLE_RE.sub(" ", s)
+    s = s.replace("\u200b", " ")  # zero-width space
+    s = WS_RE.sub(" ", s).strip()
+    return s
 
 def compute_community_terms(
     posts: pd.DataFrame,
     communities: pd.DataFrame,
     out_path: Path,
+    *,
+    topk_terms: int = 25,
+    max_posts_per_community: int = 2000,
+    min_community_posts: int = 50,
+    min_df: int = 2,
+    max_df: float = 0.7,
 ) -> None:
     merged = posts.merge(communities, on="did_hash", how="inner")
     if merged.empty:
         out_path.write_text("community_id,term,score\n", encoding="utf-8")
         return
-    merged["text"] = merged["text"].fillna("")
-    limited = merged.groupby("community_id", sort=False).head(2000)
-    grouped = limited.groupby("community_id")["text"].apply(lambda x: " ".join(x)).reset_index()
+
+    # basic cleaning
+    merged["text"] = merged["text"].fillna("").astype(str).map(clean_text)
+
+    # drop empty text rows early
+    merged = merged[merged["text"].str.len() > 0]
+    if merged.empty:
+        out_path.write_text("community_id,term,score\n", encoding="utf-8")
+        return
+
+    # skip tiny communities to avoid "stop 1.0" style artifacts
+    comm_counts = merged.groupby("community_id").size()
+    keep_ids = comm_counts[comm_counts >= min_community_posts].index
+    merged = merged[merged["community_id"].isin(keep_ids)]
+    if merged.empty:
+        out_path.write_text("community_id,term,score\n", encoding="utf-8")
+        return
+
+    # limit posts per community
+    limited = merged.groupby("community_id", sort=False).head(max_posts_per_community)
+
+    # build one "document" per community
+    grouped = (
+        limited.groupby("community_id")["text"]
+        .apply(lambda x: " ".join(x))
+        .reset_index()
+    )
     docs = grouped["text"].tolist()
     if not docs:
         out_path.write_text("community_id,term,score\n", encoding="utf-8")
         return
-    vectorizer = TfidfVectorizer(min_df=5, max_features=30000, stop_words=None)
+
+    stopwords = make_stopwords()
+
+    # Unicode-friendly token pattern: letters only (no digits/underscore)
+    token_pattern = r"(?u)\b[^\W\d_][^\W\d_]+\b"
+
+    vectorizer = TfidfVectorizer(
+        min_df=min_df,
+        max_df=max_df,
+        max_features=30000,
+        stop_words=stopwords,
+        ngram_range=(1, 2),
+        token_pattern=token_pattern,
+        lowercase=True,
+        sublinear_tf=True,
+        strip_accents="unicode",
+    )
+
     tfidf = vectorizer.fit_transform(docs)
     terms = vectorizer.get_feature_names_out()
+
     rows = []
     for idx, community_id in enumerate(grouped["community_id"].tolist()):
         row = tfidf.getrow(idx)
         if row.nnz == 0:
             continue
         scores = row.toarray().ravel()
-        top_indices = scores.argsort()[-25:][::-1]
+        top_indices = scores.argsort()[-topk_terms:][::-1]
         for term_idx in top_indices:
             score = float(scores[term_idx])
             if score <= 0:
                 continue
-            rows.append({"community_id": community_id, "term": terms[term_idx], "score": score})
+            rows.append({"community_id": int(community_id), "term": terms[term_idx], "score": score})
+
     if rows:
         pd.DataFrame(rows).to_csv(out_path, index=False)
     else:
         out_path.write_text("community_id,term,score\n", encoding="utf-8")
-
-
+        
 def main() -> None:
     args = parse_args()
     ensure_dirs()
@@ -126,13 +260,15 @@ def main() -> None:
     out_metrics = Path(f"{out_prefix}_metrics.json")
     out_metrics.write_bytes(orjson.dumps(metrics))
     posts = pd.read_parquet(posts_path)
-    compute_community_terms(posts, communities, Path(f"{out_prefix}_community_terms.csv"))
-    print(
-        "polarization_ready "
-        f"metrics={out_metrics} "
-        f"communities={metrics['n_communities']} "
-        f"modularity={modularity:.4f} "
-        f"cross_ratio={cross_ratio:.4f}"
+    compute_community_terms(
+    posts,
+    communities,
+    Path(f"{out_prefix}_community_terms.csv"),
+    topk_terms=args.topk_terms,
+    max_posts_per_community=args.max_posts_per_community,
+    min_community_posts=args.min_community_posts,
+    min_df=args.min_df,
+    max_df=args.max_df,
     )
 
 
